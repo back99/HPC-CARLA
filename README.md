@@ -1,15 +1,25 @@
-# HPC-CARLA Persistent
+# HPC-CARLA
 
-Distributed verification of autonomous-driving agents on a **SLURM + Singularity** cluster. A
-persistent CARLA server per GPU continuously drains a queue of **agent × route × weather** jobs,
-collecting per-route CARLA-Leaderboard driving scores (and, optionally, raw sensor data) across a
-roster of driving agents.
+**Closed-loop evaluation of autonomous-driving agents as a resilient, schedulable HPC workload.**
+Paper submitted to an SC26 workshop (under review) — J. Kang, **S. Jung (2nd author)**, K. Kim,
+C. Gardner, J.-S. Yeom, T.-H. Ahn, J.-W. Kim (GIST AIGS / Saint Louis University / LLNL).
 
-The current focus is a **cross-hardware comparison (A100 ↔ L40S).** The A100 is a compute GPU with
-a weak real-time rasteriser, so CARLA renders slowly and segfaults intermittently at GL-context
-creation; the pipeline is hardened to *recover* from that rather than crash. A portable launcher
-under [`examples/`](examples/) lets a contributor reproduce the same run on RTX-class hardware to
-quantify the difference.
+> This is my working fork. Upstream: [jeykang/HPC-CARLA](https://github.com/jeykang/HPC-CARLA).
+> My contribution: the **watchdog + automatic-resubmission job chain** that lets multi-hour
+> evaluation jobs survive simulator crashes and allocation expiry without manual intervention.
+
+![HPC-CARLA architecture](docs/architecture.png)
+
+**Campaign results:** a persistent CARLA server per GPU (reusing the ~120s boot across jobs) drains
+a file-locked multi-node queue of **agent × route × weather** jobs on a 16-GPU (2 × 8 A100) SLURM
+cluster, collecting per-route CARLA-Leaderboard driving scores. Episode-granular accounting
+recovered **94% of 13,059 route evaluations** from jobs that job-level accounting would have
+discarded. Six published agents run as declarative YAML pipelines over one audited stage library.
+
+The pipeline is hardened for hostile hardware: the A100 is a compute GPU with a weak real-time
+rasteriser, so CARLA renders slowly and segfaults intermittently at GL-context creation — the
+system *recovers* from that rather than crash. A portable launcher under
+[`examples/`](examples/) reproduces the same run on other clusters (A100 ↔ L40S).
 
 > **Deep reference:** [`PAPER_REFERENCE.md`](PAPER_REFERENCE.md) is the living technical reference —
 > architecture, every agent, the difficulty model, and cluster reliability. **This README is the
@@ -69,7 +79,7 @@ demand by each agent's `fetch_weights.sh`.
 ## How it works
 
 ### Persistent servers + segfault resilience
-Each GPU runs one long-lived CARLA server that workers connect to, eliminating the ~60 s per-job
+Each GPU runs one long-lived CARLA server that workers connect to, eliminating the ~120 s per-job
 startup. On the A100, GL-context creation segfaults intermittently (a host driver/rasteriser issue,
 not a code bug); `carla_server_manager.py` makes this **recoverable**: it kills the stale server,
 health-checks the reboot (port open *and* process still alive), retries, and **parks** a GPU that
@@ -81,9 +91,9 @@ Each route *file* is a **suite** of many short routes (a `_tiny` file holds 300�
 sequence and **checkpointed per route** into `results.json`. On unstable hardware a server often
 crashes mid-suite, so whole *files* rarely finish — but every route completed beforehand is saved,
 even in jobs the queue marks `failed`. [`tools/harvest_results.py`](tools/harvest_results.py)
-recovers those per-route scores from every job's checkpoint; on the current run **~89% of harvested
-route-evals come from `failed` jobs.** The reportable unit is the **route-eval**, and
-`per_route_results.csv` is the primary artifact.
+recovers those per-route scores from every job's checkpoint; in the final campaign **94% of the
+13,059 harvested route-evals came from `failed` jobs.** The reportable unit is the **route-eval**,
+and `per_route_results.csv` is the primary artifact.
 
 ### Scheduling — job-first, hardest-first, coverage-aware
 `manage_continuous.py` sorts pending jobs by
@@ -151,22 +161,18 @@ block, then `setup → smoke → run → export`.
 
 ---
 
-## Current status (snapshot, 2026-07-07 — live; use `harvest_results.py` for current numbers)
+## Final campaign (paper numbers)
 
-Active run on A100 (`pod17`): **1,680-job** queue (5 productive agents × short/tiny routes × 21
-weathers), draining continuously. Per-route harvest so far:
+The full-factorial sweep is complete and drained: **13,059 route evaluations** across the five
+productive agents, with balanced illumination coverage. Key findings reported in the paper: the
+offline difficulty score turned out to be **wrong-signed at scale** (pooled Spearman +0.44 across
+all 13,059, despite an apparent -0.64 at n≈204), and the surviving predictive signal is
+**illumination + map urban density** — significant for every evaluated agent. A cross-hardware
+portability and score-agreement study was run on an L40S cluster.
 
-| Agent | route-evals | mean driving score |
-|-------|------------:|-------------------:|
-| roach | 78 | 86.2 |
-| tcp | 48 | 83.8 |
-| neat | 37 | 81.2 |
-| interfuser | 16 | 67.3 |
-| cilrs | 94 | 32.4 |
-
-CILRS is low **by design** — audited end-to-end and confirmed genuine weak-baseline behaviour, not
-an integration bug ([`PAPER_REFERENCE.md` §5.4](PAPER_REFERENCE.md)). Illumination coverage is being
-backfilled by the coverage-aware scheduler so the per-model sensitivity axis becomes identifiable.
+CILRS scores low **by design** — audited end-to-end and confirmed genuine weak-baseline behaviour,
+not an integration bug ([`PAPER_REFERENCE.md` §5.4](PAPER_REFERENCE.md)). Use
+`tools/harvest_results.py` to regenerate current numbers from the checkpoints.
 
 ---
 
