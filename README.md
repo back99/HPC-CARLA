@@ -1,7 +1,7 @@
 # HPC-CARLA
 
 **Closed-loop evaluation of autonomous-driving agents as a resilient, schedulable HPC workload.**
-Paper submitted to an SC26 workshop (under review) — J. Kang, **S. Jung (2nd author)**, K. Kim,
+Paper accepted at WORKS 2026 (SC26 workshop) — J. Kang, **S. Jung (2nd author)**, K. Kim,
 C. Gardner, J.-S. Yeom, T.-H. Ahn, J.-W. Kim (GIST AIGS / Saint Louis University / LLNL).
 
 > This is my working fork. Upstream: [jeykang/HPC-CARLA](https://github.com/jeykang/HPC-CARLA).
