@@ -5,6 +5,10 @@ persistent CARLA server per GPU continuously drains a queue of **agent × route 
 collecting per-route CARLA-Leaderboard driving scores (and, optionally, raw sensor data) across a
 roster of driving agents.
 
+**Paper:** *HPC-CARLA: Closed-Loop Evaluation of Autonomous Driving Agents as a Resilient,
+Schedulable HPC Workload* — accepted at WORKS 2026 (SC26 Workshops). J. Kang, S. Jung, K. Kim,
+C. Gardner, J.-S. Yeom, T.-H. Ahn, J.-W. Kim.
+
 The current focus is a **cross-hardware comparison (A100 ↔ L40S).** The A100 is a compute GPU with
 a weak real-time rasteriser, so CARLA renders slowly and segfaults intermittently at GL-context
 creation; the pipeline is hardened to *recover* from that rather than crash. A portable launcher
@@ -32,7 +36,7 @@ generic `TorchModelRunner` loads any checkpointed model from `{module, class_nam
 | **CILRS** | Conditional Imitation Learning + ResNet (ICCV'19) | 1 camera | productive — a deliberately weak baseline ([§5.4](PAPER_REFERENCE.md)) |
 | **NEAT** | Neural Attention Fields (ICCV'21) | 3 cameras | productive |
 | **Roach** | RL-Coached imitation (ICCV'21) | 1 camera | productive |
-| **LAV** | Learning from All Vehicles (CVPR'22) | 4 cameras + LiDAR | **server-blocked on A100** — crashes CARLA at `load_world`; may run on L40S |
+| **LAV** | Learning from All Vehicles (CVPR'22) | 4 cameras + LiDAR | **server-blocked on A100** — crashes CARLA at `load_world`; runs on L40S ([L40S run](#l40s-cross-hardware-run)) |
 
 Four of the five productive agents are camera-only; **only InterFuser (and LAV) use LiDAR.** That
 modality split drives the difficulty analysis below. Agent weights are gitignored and fetched on
@@ -81,8 +85,8 @@ Each route *file* is a **suite** of many short routes (a `_tiny` file holds 300�
 sequence and **checkpointed per route** into `results.json`. On unstable hardware a server often
 crashes mid-suite, so whole *files* rarely finish — but every route completed beforehand is saved,
 even in jobs the queue marks `failed`. [`tools/harvest_results.py`](tools/harvest_results.py)
-recovers those per-route scores from every job's checkpoint; on the current run **~89% of harvested
-route-evals come from `failed` jobs.** The reportable unit is the **route-eval**, and
+recovers those per-route scores from every job's checkpoint; in the final campaign **94% of the
+13,059 harvested route-evals came from `failed` jobs.** The reportable unit is the **route-eval**, and
 `per_route_results.csv` is the primary artifact.
 
 ### Scheduling — job-first, hardest-first, coverage-aware
@@ -151,22 +155,55 @@ block, then `setup → smoke → run → export`.
 
 ---
 
-## Current status (snapshot, 2026-07-07 — live; use `harvest_results.py` for current numbers)
+## Final campaign (paper numbers)
 
-Active run on A100 (`pod17`): **1,680-job** queue (5 productive agents × short/tiny routes × 21
-weathers), draining continuously. Per-route harvest so far:
+A100 sweep on 2 nodes × 8 A100 (108.6 h): **2,835 jobs** (5 agents × 27 route files × 21
+weathers), all terminal — 511 completed, 2,324 failed. **13,059 route-evals** harvested;
+**94%** came from jobs the queue marks `failed`. All 168 town × weather cells are covered by
+every agent.
 
-| Agent | route-evals | mean driving score |
-|-------|------------:|-------------------:|
-| roach | 78 | 86.2 |
-| tcp | 48 | 83.8 |
-| neat | 37 | 81.2 |
-| interfuser | 16 | 67.3 |
-| cilrs | 94 | 32.4 |
+| Agent | route-evals | mean driving score | mean route completion |
+|-------|------------:|-------------------:|----------------------:|
+| TCP | 2,515 | 66.8 | 80.8 |
+| Roach | 3,304 | 61.8 | 87.5 |
+| InterFuser | 1,238 | 56.6 | 71.8 |
+| NEAT | 1,860 | 55.1 | 79.4 |
+| CILRS | 4,142 | 24.6 | 54.1 |
 
-CILRS is low **by design** — audited end-to-end and confirmed genuine weak-baseline behaviour, not
-an integration bug ([`PAPER_REFERENCE.md` §5.4](PAPER_REFERENCE.md)). Illumination coverage is being
-backfilled by the coverage-aware scheduler so the per-model sensitivity axis becomes identifiable.
+Counts differ because slower policies finish fewer episodes inside the one-hour cap, so these
+means are not condition-matched. CILRS is low **by design** — audited end-to-end and confirmed
+genuine weak-baseline behaviour, not an integration bug ([`PAPER_REFERENCE.md` §5.4](PAPER_REFERENCE.md)).
+Full figures and tables: [`METRICS_REFRESH_RESULTS_2026-07-21.md`](METRICS_REFRESH_RESULTS_2026-07-21.md).
+
+## L40S cross-hardware run
+
+TCP, NEAT and LAV were also run on an L40S cluster (SLU Libra). For TCP and NEAT the
+container, policy configuration, route files, weather presets, seed (`RUN_SEED=2000`) and
+one-hour job cap match the A100 campaign; the GPU and driver changed together.
+
+| Agent | route-evals (L40S) |
+|-------|-------------------:|
+| TCP | 5,930 |
+| NEAT | 3,027 |
+| LAV | 1,255 |
+
+Score agreement on matched episodes (same route, weather and seed on both stacks):
+
+| Population | episodes | mean change (L40S − A100) | identical scores |
+|------------|---------:|--------------------------:|-----------------:|
+| TCP, all matched | 2,505 | +15.9 | 59% |
+| TCP, Towns 01–05 † | 2,014 | −0.05 | 73% |
+| NEAT, all matched | 1,516 | −0.7 | 70% |
+
+† Post-camera-ready analysis. TCP's overall shift is concentrated in Town07 (suspected penalty
+anomaly) and Town06/10 (all A100 records there are simulator crashes). Even where means agree,
+individual episode scores can differ; these runs do not isolate the cause.
+
+Four-route illumination triad (noon / sunset / night): NEAT 75.9 / 69.2 / 71.7 (−4.2; −27.0 on
+A100), LAV 32.3 / 33.7 / 29.5 (−2.8). NEAT's fitted darkness weight is similar on both stacks
+(0.58 A100, 0.50 L40S), so the triad change is descriptive only.
+
+Watchdog stall restarts on L40S: LAV 388, TCP 1, NEAT 0.
 
 ---
 
